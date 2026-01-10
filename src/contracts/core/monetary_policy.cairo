@@ -19,7 +19,7 @@ pub mod MonetaryPolicy {
         oracle: ContractAddress,
         treasury: ContractAddress,
         liquidity_manager: ContractAddress,
-        staking_address: ContractAddress,
+        staking_contract: ContractAddress,
         bond_token: ContractAddress,
         bond_auction: ContractAddress,
         
@@ -78,7 +78,7 @@ pub mod MonetaryPolicy {
         self.oracle.write(oracle_address);
         self.treasury.write(treasury_address);
         self.liquidity_manager.write(liquidity_manager_address);
-        self.staking_address.write(staking_address);
+        self.staking_contract.write(staking_address);
         self.bond_token.write(bond_address);
         self.bond_auction.write(bond_auction_address);
         
@@ -180,7 +180,7 @@ pub mod MonetaryPolicy {
             if treasury_share > 0 { fusd.mint(self.treasury.read(), treasury_share); }
             
             if staking_share > 0 { 
-                let staking_addr = self.staking_address.read();
+                let staking_addr = self.staking_contract.read();
                 fusd.mint(staking_addr, staking_share); 
             }
 
