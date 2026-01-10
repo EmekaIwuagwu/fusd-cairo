@@ -1,7 +1,7 @@
 #[starknet::contract]
 pub mod FUSDToken {
     use starknet::{ContractAddress, get_caller_address};
-    use fusd::contracts::interfaces::ISNIP2::ISNIP2;
+    use fusd::contracts::interfaces::IFUSD::IFUSD;
     use fusd::contracts::libraries::access_control::AccessControlComponent;
     use starknet::storage::{
         Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess
@@ -12,7 +12,6 @@ pub mod FUSDToken {
 
     #[abi(embed_v0)]
     impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
-    
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
 
     #[storage]
@@ -64,16 +63,14 @@ pub mod FUSDToken {
         self._name.write('FUSD');
         self._symbol.write('FUSD');
         self._decimals.write(18);
-        self._max_supply.write(1_000_000_000_000_000_000_000_000_000); // 1 Billion default cap
+        self._max_supply.write(1_000_000_000_000_000_000_000_000_000); 
 
         self.access_control.initializer(owner);
-
-        // Bootstrap
         self._mint(recipient, initial_supply);
     }
 
     #[abi(embed_v0)]
-    impl FUSDTokenImpl of ISNIP2<ContractState> {
+    impl FUSDTokenImpl of IFUSD<ContractState> {
         fn name(self: @ContractState) -> felt252 {
             self._name.read()
         }
@@ -120,6 +117,21 @@ pub mod FUSDToken {
             self._approve(caller, spender, amount);
             true
         }
+
+        fn mint(ref self: ContractState, to: ContractAddress, amount: u256) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::MINTER);
+            self._mint(to, amount);
+        }
+
+        fn burn(ref self: ContractState, from: ContractAddress, amount: u256) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::BURNER);
+            self._burn(from, amount);
+        }
+        
+        fn set_max_supply(ref self: ContractState, new_cap: u256) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::GOVERNANCE);
+            self._max_supply.write(new_cap);
+        }
     }
 
     #[generate_trait]
@@ -160,24 +172,5 @@ pub mod FUSDToken {
             self._total_supply.write(self._total_supply.read() - amount);
             self.emit(Transfer { from: account, to: Zero::zero(), value: amount });
         }
-    }
-    
-    // Privileged functions
-    #[external(v0)]
-    fn mint(ref self: ContractState, to: ContractAddress, amount: u256) {
-        self.access_control._assert_only_role(AccessControlComponent::Roles::MINTER);
-        self._mint(to, amount);
-    }
-
-    #[external(v0)]
-    fn burn(ref self: ContractState, from: ContractAddress, amount: u256) {
-        self.access_control._assert_only_role(AccessControlComponent::Roles::BURNER);
-        self._burn(from, amount);
-    }
-    
-    #[external(v0)]
-    fn set_max_supply(ref self: ContractState, new_cap: u256) {
-        self.access_control._assert_only_role(AccessControlComponent::Roles::GOVERNANCE);
-        self._max_supply.write(new_cap);
     }
 }
