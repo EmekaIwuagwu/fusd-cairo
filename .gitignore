@@ -1,3 +1,8 @@
 target/
 Scarb.lock
 .snforge/
+.env
+account.json
+keystore.json
+*.contract_class.json
+*.compiled_contract_class.json
