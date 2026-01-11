@@ -3,7 +3,10 @@ pub mod MonetaryPolicy {
     use starknet::{ContractAddress, get_block_timestamp};
     use fusd::contracts::interfaces::IFUSD::{IFUSDDispatcher, IFUSDDispatcherTrait};
     use fusd::contracts::interfaces::IOracle::{IOracleDispatcher, IOracleDispatcherTrait};
-    use fusd::contracts::interfaces::IProtocol::{IMonetaryPolicy, IPausable, IBondAuctionDispatcher, IBondAuctionDispatcherTrait};
+    use fusd::contracts::interfaces::IProtocol::{
+        IMonetaryPolicy, IPausable, IBondAuctionDispatcher, IBondAuctionDispatcherTrait,
+        IStakingDispatcher, IStakingDispatcherTrait
+    };
     use fusd::contracts::libraries::access_control::AccessControlComponent;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
 
@@ -29,6 +32,8 @@ pub mod MonetaryPolicy {
         last_rebase_time: u64,
         epoch_duration: u64,
         
+        max_supply_cap: u256,
+        
         paused: bool,
         
         #[substorage(v0)]
@@ -42,6 +47,7 @@ pub mod MonetaryPolicy {
         AccessControlEvent: AccessControlComponent::Event,
         Paused: Paused,
         Unpaused: Unpaused,
+        SupplyCapUpdated: SupplyCapUpdated,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -60,6 +66,12 @@ pub mod MonetaryPolicy {
     #[derive(Drop, starknet::Event)]
     pub struct Unpaused {
         pub account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct SupplyCapUpdated {
+        pub old_cap: u256,
+        pub new_cap: u256,
     }
 
     #[constructor]
@@ -85,6 +97,7 @@ pub mod MonetaryPolicy {
         self.target_price.write(1_000_000_000_000_000_000); 
         self.deviation_threshold.write(20_000_000_000_000_000); 
         self.epoch_duration.write(21600); 
+        self.max_supply_cap.write(100_000_000_000_000_000_000_000); // 100k cap for testnet
         self.paused.write(false);
         
         self.access_control.initializer(owner);
@@ -97,6 +110,7 @@ pub mod MonetaryPolicy {
             
             let current_time = get_block_timestamp();
             let last_rebase = self.last_rebase_time.read();
+            // Stricter cooldown check: at least 1 epoch duration must pass
             assert(current_time >= last_rebase + self.epoch_duration.read(), 'MonetaryPolicy: Cooldown');
             
             let oracle_dispatcher = IOracleDispatcher { contract_address: self.oracle.read() };
@@ -163,18 +177,26 @@ pub mod MonetaryPolicy {
         fn _expand(ref self: ContractState, price: u256, target: u256) {
             let fusd = IFUSDDispatcher { contract_address: self.fusd_token.read() };
             let total_supply = fusd.total_supply();
+            let max_cap = self.max_supply_cap.read();
             
+            if total_supply >= max_cap { return; }
+
             let diff = price - target;
-            let mint_amount = (total_supply * diff) / (target * 2);
+            let mut mint_amount = (total_supply * diff) / (target * 2);
             
             let cap = total_supply / 50; 
-            let final_mint = if mint_amount > cap { cap } else { mint_amount };
+            if mint_amount > cap { mint_amount = cap; }
             
-            if final_mint == 0 { return; }
+            // Further cap by maximum supply
+            if total_supply + mint_amount > max_cap {
+                mint_amount = max_cap - total_supply;
+            }
+
+            if mint_amount == 0 { return; }
             
-            let lp_share = final_mint / 2;
-            let treasury_share = (final_mint * 3) / 10;
-            let staking_share = final_mint - lp_share - treasury_share;
+            let lp_share = mint_amount / 2;
+            let treasury_share = (mint_amount * 3) / 10;
+            let staking_share = mint_amount - lp_share - treasury_share;
             
             if lp_share > 0 { fusd.mint(self.liquidity_manager.read(), lp_share); }
             if treasury_share > 0 { fusd.mint(self.treasury.read(), treasury_share); }
@@ -182,6 +204,7 @@ pub mod MonetaryPolicy {
             if staking_share > 0 { 
                 let staking_addr = self.staking_contract.read();
                 fusd.mint(staking_addr, staking_share); 
+                IStakingDispatcher { contract_address: staking_addr }.notify_reward_amount(staking_share);
             }
 
             IBondAuctionDispatcher { contract_address: self.bond_auction.read() }.end_auction();
@@ -190,5 +213,13 @@ pub mod MonetaryPolicy {
         fn _contract(ref self: ContractState, price: u256, target: u256) {
              IBondAuctionDispatcher { contract_address: self.bond_auction.read() }.start_auction();
         }
+    }
+
+    #[external(v0)]
+    fn update_supply_cap(ref self: ContractState, new_cap: u256) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        let old_cap = self.max_supply_cap.read();
+        self.max_supply_cap.write(new_cap);
+        self.emit(SupplyCapUpdated { old_cap, new_cap });
     }
 }

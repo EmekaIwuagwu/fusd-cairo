@@ -101,6 +101,16 @@ pub mod OracleAdapter {
             let current = get_block_timestamp();
             current - timestamp > self.staleness_threshold.read()
         }
+
+        fn set_staleness_threshold(ref self: ContractState, threshold: u64) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+            self.staleness_threshold.write(threshold);
+        }
+
+        fn set_max_deviation_bps(ref self: ContractState, bps: u64) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+            self.max_deviation_bps.write(bps);
+        }
     }
     
     #[generate_trait]

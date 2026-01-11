@@ -3,10 +3,17 @@ pub mod Staking {
     use starknet::{ContractAddress, get_caller_address};
     use fusd::contracts::interfaces::ISNIP2::{ISNIP2Dispatcher, ISNIP2DispatcherTrait};
     use fusd::contracts::interfaces::IProtocol::IStaking;
+    use fusd::contracts::libraries::access_control::AccessControlComponent;
     use starknet::storage::{
         Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess
     };
     use core::num::traits::Zero;
+
+    component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+
+    #[abi(embed_v0)]
+    impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
+    impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
@@ -17,6 +24,8 @@ pub mod Staking {
         user_reward_per_token_paid: Map::<ContractAddress, u256>,
         rewards: Map::<ContractAddress, u256>,
         last_update_time: u64,
+        #[substorage(v0)]
+        access_control: AccessControlComponent::Storage,
     }
 
     #[event]
@@ -25,6 +34,7 @@ pub mod Staking {
         Staked: Staked,
         Withdrawn: Withdrawn,
         RewardPaid: RewardPaid,
+        AccessControlEvent: AccessControlComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -49,8 +59,9 @@ pub mod Staking {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, fusd: ContractAddress) {
+    fn constructor(ref self: ContractState, fusd: ContractAddress, admin: ContractAddress) {
         self.fusd_token.write(fusd);
+        self.access_control.initializer(admin);
     }
 
     #[abi(embed_v0)]
@@ -86,11 +97,12 @@ pub mod Staking {
             self.emit(Withdrawn { user, amount });
         }
 
-        fn claim_rewards(ref self: ContractState) {
+        fn claim_rewards(ref self: ContractState, min_reward_amount: u256) {
             let user = get_caller_address();
             self._update_reward(user);
             
             let reward = self.rewards.read(user);
+            assert(reward >= min_reward_amount, 'Claim: Slippage protection');
             if reward > 0 {
                 self.rewards.write(user, 0);
                 let fusd = ISNIP2Dispatcher { contract_address: self.fusd_token.read() };
@@ -102,14 +114,14 @@ pub mod Staking {
         fn get_user_stake(self: @ContractState, user: ContractAddress) -> u256 {
             self.user_stakes.read(user)
         }
-    }
 
-    #[external(v0)]
-    fn notify_reward_amount(ref self: ContractState, reward: u256) {
-        let total = self.total_staked.read();
-        if total > 0 {
-            let current_stored = self.reward_per_token_stored.read();
-            self.reward_per_token_stored.write(current_stored + (reward * 1_000_000_000_000_000_000 / total));
+        fn notify_reward_amount(ref self: ContractState, amount: u256) {
+            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+            let total = self.total_staked.read();
+            if total > 0 {
+                let current_stored = self.reward_per_token_stored.read();
+                self.reward_per_token_stored.write(current_stored + (amount * 1_000_000_000_000_000_000 / total));
+            }
         }
     }
 

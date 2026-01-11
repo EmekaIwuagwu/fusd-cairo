@@ -4,15 +4,18 @@ pub mod BondAuction {
     use fusd::contracts::interfaces::IFUSD::{IFUSDDispatcher, IFUSDDispatcherTrait};
     use fusd::contracts::interfaces::IProtocol::{IBondDispatcher, IBondDispatcherTrait};
     use fusd::contracts::libraries::access_control::AccessControlComponent;
+    use fusd::contracts::libraries::reentrancy_guard::ReentrancyGuardComponent;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess
     };
 
     component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+    component!(path: ReentrancyGuardComponent, storage: reentrancy, event: ReentrancyGuardEvent);
 
     #[abi(embed_v0)]
     impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
+    impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
@@ -22,6 +25,8 @@ pub mod BondAuction {
         auction_active: bool,
         #[substorage(v0)]
         access_control: AccessControlComponent::Storage,
+        #[substorage(v0)]
+        reentrancy: ReentrancyGuardComponent::Storage,
     }
 
     #[event]
@@ -31,6 +36,7 @@ pub mod BondAuction {
         AuctionStarted: AuctionStarted,
         AuctionEnded: AuctionEnded,
         AccessControlEvent: AccessControlComponent::Event,
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -66,23 +72,25 @@ pub mod BondAuction {
 
     #[external(v0)]
     fn buy_bonds(ref self: ContractState, fusd_amount: u256) {
+        self.reentrancy.start();
         assert(self.auction_active.read(), 'Auction not active');
         let user = get_caller_address();
         
-        let fusd = IFUSDDispatcher { contract_address: self.fusd_token.read() };
-        fusd.transfer_from(user, starknet::get_contract_address(), fusd_amount);
-        
-        // Burn the FUSD to contract supply
-        fusd.burn(starknet::get_contract_address(), fusd_amount);
-        
-        // Issue bonds (1 FUSD = 1 / (1 - discount) Bonds)
         let discount = self.bond_price_discount.read();
         let bond_amount = (fusd_amount * 100) / (100 - discount.into());
         
+        let fusd = IFUSDDispatcher { contract_address: self.fusd_token.read() };
         let bond = IBondDispatcher { contract_address: self.bond_token.read() };
+        
+        // Effects before interactions
+        self.emit(BondsPurchased { user, fusd_paid: fusd_amount, bonds_issued: bond_amount });
+
+        // Interactions
+        fusd.transfer_from(user, starknet::get_contract_address(), fusd_amount);
+        fusd.burn(starknet::get_contract_address(), fusd_amount);
         bond.issue(user, bond_amount, get_block_timestamp() + 2592000);
         
-        self.emit(BondsPurchased { user, fusd_paid: fusd_amount, bonds_issued: bond_amount });
+        self.reentrancy.end();
     }
 
     #[external(v0)]

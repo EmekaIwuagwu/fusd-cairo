@@ -34,8 +34,9 @@ pub trait IGovernor<TContractState> {
 pub trait IStaking<TContractState> {
     fn stake(ref self: TContractState, amount: u256);
     fn withdraw(ref self: TContractState, amount: u256);
-    fn claim_rewards(ref self: TContractState);
+    fn claim_rewards(ref self: TContractState, min_reward_amount: u256);
     fn get_user_stake(self: @TContractState, user: ContractAddress) -> u256;
+    fn notify_reward_amount(ref self: TContractState, amount: u256);
 }
 
 #[starknet::interface]
