@@ -13,6 +13,8 @@ pub trait IFUSD<TContractState> {
         ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
     ) -> bool;
     fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+    fn increase_allowance(ref self: TContractState, spender: ContractAddress, added_value: u256) -> bool;
+    fn decrease_allowance(ref self: TContractState, spender: ContractAddress, subtracted_value: u256) -> bool;
 
     fn mint(ref self: TContractState, to: ContractAddress, amount: u256);
     fn burn(ref self: TContractState, from: ContractAddress, amount: u256);

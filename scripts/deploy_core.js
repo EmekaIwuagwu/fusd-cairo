@@ -97,7 +97,7 @@ async function main() {
     await deploy('Staking', [deployedAddresses['FUSDToken'], accountAddress]);
 
     // 5. BondToken
-    await deploy('BondToken', [accountAddress]);
+    await deploy('BondToken', [deployedAddresses['FUSDToken'], accountAddress]);
 
     // 6. BondAuction
     await deploy('BondAuction', [
@@ -142,6 +142,7 @@ async function main() {
     };
 
     await grantRole(deployedAddresses['FUSDToken'], roles.MINTER, deployedAddresses['MonetaryPolicy']);
+    await grantRole(deployedAddresses['FUSDToken'], roles.MINTER, deployedAddresses['BondToken']);
     await grantRole(deployedAddresses['FUSDToken'], roles.BURNER, deployedAddresses['BondAuction']);
     await grantRole(deployedAddresses['BondToken'], roles.MINTER, deployedAddresses['BondAuction']);
     await grantRole(deployedAddresses['Staking'], roles.ADMIN, deployedAddresses['MonetaryPolicy']);

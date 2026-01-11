@@ -2,20 +2,34 @@
 pub mod Paymaster {
     use starknet::{ContractAddress, get_caller_address, get_contract_address, get_tx_info};
     use fusd::contracts::interfaces::ISNIP2::{ISNIP2Dispatcher, ISNIP2DispatcherTrait};
+    use fusd::contracts::libraries::access_control::AccessControlComponent;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
+
+    component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+
+    #[abi(embed_v0)]
+    impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
+    impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
         fusd_token: ContractAddress,
         fusd_to_strk_rate: u256, 
-        owner: ContractAddress,
+        #[substorage(v0)]
+        access_control: AccessControlComponent::Storage,
+    }
+
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    enum Event {
+        AccessControlEvent: AccessControlComponent::Event,
     }
 
     #[constructor]
     fn constructor(ref self: ContractState, fusd: ContractAddress, initial_rate: u256, owner: ContractAddress) {
         self.fusd_token.write(fusd);
         self.fusd_to_strk_rate.write(initial_rate);
-        self.owner.write(owner);
+        self.access_control.initializer(owner);
     }
     
     #[abi(embed_v0)]
@@ -34,7 +48,7 @@ pub mod Paymaster {
         }
         
         fn set_rate(ref self: ContractState, new_rate: u256) {
-            assert(get_caller_address() == self.owner.read(), 'Only owner');
+            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
             self.fusd_to_strk_rate.write(new_rate);
         }
     }

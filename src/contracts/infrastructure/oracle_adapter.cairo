@@ -3,32 +3,50 @@ pub mod OracleAdapter {
     use starknet::{ContractAddress, get_block_timestamp};
     use fusd::contracts::interfaces::IOracle::{IOracle, IOracleDispatcher, IOracleDispatcherTrait};
     use fusd::contracts::libraries::access_control::AccessControlComponent;
+    use fusd::contracts::libraries::pausable::PausableComponent;
     use starknet::storage::{
         Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess
     };
     use core::num::traits::Zero;
 
     component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
 
     #[abi(embed_v0)]
     impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
 
+    #[abi(embed_v0)]
+    impl PausableImpl = PausableComponent::PausableImpl<ContractState>;
+    impl PausableInternalImpl = PausableComponent::InternalImpl<ContractState>;
+
     #[storage]
     struct Storage {
-        oracle_sources: Map::<u8, ContractAddress>, // 0, 1, 2
+        oracle_sources: Map::<u8, ContractAddress>,
         sources_count: u8,
-        staleness_threshold: u64, // e.g. 15 mins (900 sec)
-        max_deviation_bps: u64, // 200 bps (2%)
+        staleness_threshold: u64,
+        max_deviation_bps: u64,
+        emergency_oracle: ContractAddress,
+        use_emergency: bool,
         
         #[substorage(v0)]
         access_control: AccessControlComponent::Storage,
+        #[substorage(v0)]
+        pausable: PausableComponent::Storage,
     }
 
     #[event]
     #[derive(Drop, starknet::Event)]
     enum Event {
         AccessControlEvent: AccessControlComponent::Event,
+        PausableEvent: PausableComponent::Event,
+        EmergencyOracleUpdated: EmergencyOracleUpdated,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct EmergencyOracleUpdated {
+        pub oracle: ContractAddress,
+        pub active: bool,
     }
 
     #[constructor]
@@ -49,11 +67,20 @@ pub mod OracleAdapter {
         self.sources_count.write(i);
         self.staleness_threshold.write(900);
         self.max_deviation_bps.write(200);
+        self.use_emergency.write(false);
     }
 
     #[abi(embed_v0)]
     impl IOracleImpl of IOracle<ContractState> {
         fn get_price(self: @ContractState, asset: felt252) -> (u256, u64) {
+             self.pausable.assert_not_paused();
+
+             if self.use_emergency.read() {
+                 let emergency = self.emergency_oracle.read();
+                 assert(!emergency.is_zero(), 'Emergency oracle not set');
+                 return IOracleDispatcher { contract_address: emergency }.get_price(asset);
+             }
+
              let count = self.sources_count.read();
              let threshold = self.staleness_threshold.read();
              let current_time = get_block_timestamp();
@@ -69,7 +96,7 @@ pub mod OracleAdapter {
                     let dispatcher = IOracleDispatcher { contract_address: oracle_addr };
                     let (price, timestamp) = dispatcher.get_price(asset);
                     
-                    if current_time - timestamp <= threshold {
+                    if current_time >= timestamp && current_time - timestamp <= threshold {
                         prices.append(price);
                         valid_count += 1;
                     }
@@ -112,36 +139,63 @@ pub mod OracleAdapter {
             self.max_deviation_bps.write(bps);
         }
     }
+
+    #[external(v0)]
+    fn set_emergency_oracle(ref self: ContractState, oracle: ContractAddress, active: bool) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        self.emergency_oracle.write(oracle);
+        self.use_emergency.write(active);
+        self.emit(EmergencyOracleUpdated { oracle, active });
+    }
+
+    #[external(v0)]
+    fn pause(ref self: ContractState) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        self.pausable.pause();
+    }
+
+    #[external(v0)]
+    fn unpause(ref self: ContractState) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        self.pausable.unpause();
+    }
     
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        fn _sort(self: @ContractState, array: Array<u256>) -> Array<u256> {
+        fn _sort(self: @ContractState, mut array: Array<u256>) -> Array<u256> {
              let len = array.len();
+             if len <= 1 { return array; }
+             
              let mut sorted = ArrayTrait::new();
-             if len == 0 { return sorted; }
-             if len == 1 { 
-                 sorted.append(*array.at(0));
-                 return sorted;
-             }
-             if len == 2 {
-                 let a = *array.at(0);
-                 let b = *array.at(1);
-                 if a <= b { sorted.append(a); sorted.append(b); }
-                 else { sorted.append(b); sorted.append(a); }
-                 return sorted;
-             }
-             if len >= 3 {
-                 let a = *array.at(0);
-                 let b = *array.at(1);
-                 let c = *array.at(2);
-                 if a <= b && b <= c { sorted.append(a); sorted.append(b); sorted.append(c); }
-                 else if a <= c && c <= b { sorted.append(a); sorted.append(c); sorted.append(b); }
-                 else if b <= a && a <= c { sorted.append(b); sorted.append(a); sorted.append(c); }
-                 else if b <= c && c <= a { sorted.append(b); sorted.append(c); sorted.append(a); }
-                 else if c <= a && a <= b { sorted.append(c); sorted.append(a); sorted.append(b); }
-                 else { sorted.append(c); sorted.append(b); sorted.append(a); }
-                 return sorted;
-             }
+             let mut remaining = array;
+             
+             loop {
+                 if remaining.len() == 0 { break; }
+                 let mut min_idx: usize = 0;
+                 let mut min_val = *remaining.at(0);
+                 let mut k: usize = 1;
+                 loop {
+                     if k >= remaining.len() { break; }
+                     let v = *remaining.at(k);
+                     if v < min_val {
+                         min_val = v;
+                         min_idx = k;
+                     }
+                     k += 1;
+                 };
+                 sorted.append(min_val);
+                 
+                 let mut next_remaining = ArrayTrait::new();
+                 let mut m: usize = 0;
+                 loop {
+                     if m >= remaining.len() { break; }
+                     if m != min_idx {
+                         next_remaining.append(*remaining.at(m));
+                     }
+                     m += 1;
+                 };
+                 remaining = next_remaining;
+             };
              sorted
         }
     }

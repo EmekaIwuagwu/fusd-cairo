@@ -27,9 +27,15 @@ The protocol has undergone a comprehensive internal security audit. All critical
 | Severity | Status | Mitigation |
 | :--- | :--- | :--- |
 | **CRITICAL** | ✅ Fixed | Implemented ReentrancyGuard and CEI pattern in BondAuction. |
-| **CRITICAL** | ✅ Fixed | Added Supply Cap and epoch-based minting limits in MonetaryPolicy. |
-| **HIGH** | ✅ Fixed | Added slippage protection to Staking reward claims. |
-| **HIGH** | ✅ Fixed | Implemented administrative tunables for Oracle staleness and deviation. |
+| **CRITICAL** | ✅ Fixed | Added Supply Cap and circuit-breaker in MonetaryPolicy. |
+| **HIGH** | ✅ Fixed | Added slippage protection to Staking and Bond redemption. |
+| **HIGH** | ✅ Fixed | Implemented Emergency Oracle override and robust median calculation. |
+
+**Hardenings Added:**
+- **Emergency Pause**: Protocol-wide `Pausable` integration across all core contracts.
+- **Circuit Breaker**: `MonetaryPolicy` now auto-pauses if price deviations exceed 20%, protecting against oracle crashes.
+- **Double Cooldown**: Rebases now require both Time and Block-number progression.
+- **ERC20 Protection**: Standardized `increase_allowance` and `decrease_allowance` in FUSD token.
 
 **Full Audit Report:** [AUDIT_REPORT.md](./AUDIT_REPORT.md)
 
@@ -41,14 +47,14 @@ The protocol is fully deployed and operational on Starknet Sepolia.
 
 | Contract | Address | Explorer Link |
 | :--- | :--- | :--- |
-| **FUSD Token** | `0x06c57ed02a697c5bf7b82b43635d56f7308e0debdb20fd961086fccde27af0b7` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x06c57ed02a697c5bf7b82b43635d56f7308e0debdb20fd961086fccde27af0b7) |
-| **Monetary Policy** | `0x04736b65c8dfaaed3ee18eaa035fc42c8cbdd8b9a67c7c381d840500f6e31e8a` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x04736b65c8dfaaed3ee18eaa035fc42c8cbdd8b9a67c7c381d840500f6e31e8a) |
-| **Staking** | `0x01df773bc19e6d5a3dcae176219dedcea5307e17ca43eb97b7d8926fb45209b4` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x01df773bc19e6d5a3dcae176219dedcea5307e17ca43eb97b7d8926fb45209b4) |
-| **Bond Auction** | `0x03f5ef1d26b5e8e5c046ee10c3b17aff8e0ad8cfe9d3262ea6a390ad43c7dd1a` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x03f5ef1d26b5e8e5c046ee10c3b17aff8e0ad8cfe9d3262ea6a390ad43c7dd1a) |
-| **Oracle Adapter** | `0x0bff37bf7c1736537991d0c865c229c689f8817e9c0ec226519d6f66f05cd88` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x0bff37bf7c1736537991d0c865c229c689f8817e9c0ec226519d6f66f05cd88) |
-| **Treasury** | `0x05c048706b4f9c935c801f40cb046acb12b990e3e6a0e9332c8b951f2945b899` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x05c048706b4f9c935c801f40cb046acb12b990e3e6a0e9332c8b951f2945b899) |
-| **Liquidity Manager** | `0x0320688ad4fb61fae6d60f06aa9a12d2518afde7b8796810b2ae821f70d0b406` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x0320688ad4fb61fae6d60f06aa9a12d2518afde7b8796810b2ae821f70d0b406) |
-| **Bond Token** | `0x0141614a0fa5a0bb5591e4906e03932f81c2b0cb1ff4e3848593c9590f7e1466` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x0141614a0fa5a0bb5591e4906e03932f81c2b0cb1ff4e3848593c9590f7e1466) |
+| **FUSD Token** | `0x0a2cbd3a4b2fac3c6702090dfdddf69b429fda459d4a27840c669eb9653245d` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x0a2cbd3a4b2fac3c6702090dfdddf69b429fda459d4a27840c669eb9653245d) |
+| **Monetary Policy** | `0x02cd060af8247e53ba20c4e988a6ade3368c32cfb8486dda19058e688e2368f9` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x02cd060af8247e53ba20c4e988a6ade3368c32cfb8486dda19058e688e2368f9) |
+| **Staking** | `0x03d516c810ba803a548fbc0ce63f794750ef5125efcdef5404a0080f6808d5fa` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x03d516c810ba803a548fbc0ce63f794750ef5125efcdef5404a0080f6808d5fa) |
+| **Bond Auction** | `0x03c02f204d438254821e4127fe8c39327e2126356600efb392676afe50f36558` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x03c02f204d438254821e4127fe8c39327e2126356600efb392676afe50f36558) |
+| **Oracle Adapter** | `0x069b531607edc04af27ab099c3ced2827d53bea4e70d160a59e56a146b6d83c0` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x069b531607edc04af27ab099c3ced2827d53bea4e70d160a59e56a146b6d83c0) |
+| **Treasury** | `0x07b0097fbfc8a16687d68cbb2667ec48b56c143a47da25ddb90bda1be7ce83e6` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x07b0097fbfc8a16687d68cbb2667ec48b56c143a47da25ddb90bda1be7ce83e6) |
+| **Liquidity Manager** | `0x0ab00840455a9bc17adecb5c1eba8b0227e6f33df3b84e1b602d3ac5e1f55f` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x0ab00840455a9bc17adecb5c1eba8b0227e6f33df3b84e1b602d3ac5e1f55f) |
+| **Bond Token** | `0x02c7b56faa8dc03072e91db7a45e549920d771f1070ac466e6b5f1c71c07bbeb` | [View on Starkscan](https://sepolia.starkscan.co/contract/0x02c7b56faa8dc03072e91db7a45e549920d771f1070ac466e6b5f1c71c07bbeb) |
 
 ---
 

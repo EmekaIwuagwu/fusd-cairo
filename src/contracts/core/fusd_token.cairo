@@ -3,16 +3,22 @@ pub mod FUSDToken {
     use starknet::{ContractAddress, get_caller_address};
     use fusd::contracts::interfaces::IFUSD::IFUSD;
     use fusd::contracts::libraries::access_control::AccessControlComponent;
+    use fusd::contracts::libraries::pausable::PausableComponent;
     use starknet::storage::{
         Map, StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess
     };
     use core::num::traits::Zero;
     
     component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
 
     #[abi(embed_v0)]
     impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
+
+    #[abi(embed_v0)]
+    impl PausableImpl = PausableComponent::PausableImpl<ContractState>;
+    impl PausableInternalImpl = PausableComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
@@ -25,6 +31,8 @@ pub mod FUSDToken {
         _max_supply: u256,
         #[substorage(v0)]
         access_control: AccessControlComponent::Storage,
+        #[substorage(v0)]
+        pausable: PausableComponent::Storage,
     }
 
     #[event]
@@ -33,6 +41,7 @@ pub mod FUSDToken {
         Transfer: Transfer,
         Approval: Approval,
         AccessControlEvent: AccessControlComponent::Event,
+        PausableEvent: PausableComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -96,6 +105,7 @@ pub mod FUSDToken {
         }
 
         fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
+            self.pausable.assert_not_paused();
             let sender = get_caller_address();
             self._transfer(sender, recipient, amount);
             true
@@ -104,6 +114,7 @@ pub mod FUSDToken {
         fn transfer_from(
             ref self: ContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256
         ) -> bool {
+            self.pausable.assert_not_paused();
             let spender = get_caller_address();
             let current_allowance = self._allowances.read((sender, spender));
             assert(current_allowance >= amount, 'ERC20: low allowance');
@@ -115,6 +126,20 @@ pub mod FUSDToken {
         fn approve(ref self: ContractState, spender: ContractAddress, amount: u256) -> bool {
             let caller = get_caller_address();
             self._approve(caller, spender, amount);
+            true
+        }
+
+        fn increase_allowance(ref self: ContractState, spender: ContractAddress, added_value: u256) -> bool {
+            let caller = get_caller_address();
+            self._approve(caller, spender, self._allowances.read((caller, spender)) + added_value);
+            true
+        }
+
+        fn decrease_allowance(ref self: ContractState, spender: ContractAddress, subtracted_value: u256) -> bool {
+            let caller = get_caller_address();
+            let current_allowance = self._allowances.read((caller, spender));
+            assert(current_allowance >= subtracted_value, 'ERC20: low allowance');
+            self._approve(caller, spender, current_allowance - subtracted_value);
             true
         }
 
@@ -132,6 +157,18 @@ pub mod FUSDToken {
             self.access_control._assert_only_role(AccessControlComponent::Roles::GOVERNANCE);
             self._max_supply.write(new_cap);
         }
+    }
+
+    #[external(v0)]
+    fn pause(ref self: ContractState) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        self.pausable.pause();
+    }
+
+    #[external(v0)]
+    fn unpause(ref self: ContractState) {
+        self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN);
+        self.pausable.unpause();
     }
 
     #[generate_trait]

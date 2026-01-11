@@ -1,20 +1,26 @@
 #[starknet::contract]
 pub mod MonetaryPolicy {
-    use starknet::{ContractAddress, get_block_timestamp};
+    use starknet::{ContractAddress, get_block_timestamp, get_block_number};
     use fusd::contracts::interfaces::IFUSD::{IFUSDDispatcher, IFUSDDispatcherTrait};
     use fusd::contracts::interfaces::IOracle::{IOracleDispatcher, IOracleDispatcherTrait};
     use fusd::contracts::interfaces::IProtocol::{
-        IMonetaryPolicy, IPausable, IBondAuctionDispatcher, IBondAuctionDispatcherTrait,
+        IMonetaryPolicy, IBondAuctionDispatcher, IBondAuctionDispatcherTrait,
         IStakingDispatcher, IStakingDispatcherTrait
     };
     use fusd::contracts::libraries::access_control::AccessControlComponent;
+    use fusd::contracts::libraries::pausable::PausableComponent;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
 
     component!(path: AccessControlComponent, storage: access_control, event: AccessControlEvent);
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
 
     #[abi(embed_v0)]
     impl AccessControlImpl = AccessControlComponent::AccessControlImpl<ContractState>;
     impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
+
+    #[abi(embed_v0)]
+    impl PausableImpl = PausableComponent::PausableImpl<ContractState>;
+    impl PausableInternalImpl = PausableComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
@@ -28,16 +34,19 @@ pub mod MonetaryPolicy {
         
         target_price: u256,
         deviation_threshold: u256,
+        circuit_breaker_threshold: u256, 
         
         last_rebase_time: u64,
+        last_rebase_block: u64,
         epoch_duration: u64,
+        min_rebase_blocks: u64,
         
         max_supply_cap: u256,
         
-        paused: bool,
-        
         #[substorage(v0)]
         access_control: AccessControlComponent::Storage,
+        #[substorage(v0)]
+        pausable: PausableComponent::Storage,
     }
 
     #[event]
@@ -45,9 +54,9 @@ pub mod MonetaryPolicy {
     enum Event {
         RebaseOperation: RebaseOperation,
         AccessControlEvent: AccessControlComponent::Event,
-        Paused: Paused,
-        Unpaused: Unpaused,
+        PausableEvent: PausableComponent::Event,
         SupplyCapUpdated: SupplyCapUpdated,
+        CircuitBreakerTriggered: CircuitBreakerTriggered,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -59,19 +68,15 @@ pub mod MonetaryPolicy {
     }
 
     #[derive(Drop, starknet::Event)]
-    pub struct Paused {
-        pub account: ContractAddress,
-    }
-    
-    #[derive(Drop, starknet::Event)]
-    pub struct Unpaused {
-        pub account: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
     pub struct SupplyCapUpdated {
         pub old_cap: u256,
         pub new_cap: u256,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct CircuitBreakerTriggered {
+        pub price: u256,
+        pub target: u256,
     }
 
     #[constructor]
@@ -96,9 +101,10 @@ pub mod MonetaryPolicy {
         
         self.target_price.write(1_000_000_000_000_000_000); 
         self.deviation_threshold.write(20_000_000_000_000_000); 
+        self.circuit_breaker_threshold.write(200_000_000_000_000_000); 
         self.epoch_duration.write(21600); 
-        self.max_supply_cap.write(100_000_000_000_000_000_000_000); // 100k cap for testnet
-        self.paused.write(false);
+        self.min_rebase_blocks.write(100);
+        self.max_supply_cap.write(1_000_000_000_000_000_000_000_000); 
         
         self.access_control.initializer(owner);
     }
@@ -106,12 +112,15 @@ pub mod MonetaryPolicy {
     #[abi(embed_v0)]
     impl MonetaryPolicyImpl of IMonetaryPolicy<ContractState> {
         fn rebase(ref self: ContractState) {
-            assert(!self.paused.read(), 'MonetaryPolicy: Paused');
+            self.pausable.assert_not_paused();
             
             let current_time = get_block_timestamp();
-            let last_rebase = self.last_rebase_time.read();
-            // Stricter cooldown check: at least 1 epoch duration must pass
-            assert(current_time >= last_rebase + self.epoch_duration.read(), 'MonetaryPolicy: Cooldown');
+            let current_block = get_block_number();
+            let last_rebase_t = self.last_rebase_time.read();
+            let last_rebase_b = self.last_rebase_block.read();
+            
+            assert(current_time >= last_rebase_t + self.epoch_duration.read(), 'Cooldown: Time');
+            assert(current_block >= last_rebase_b + self.min_rebase_blocks.read(), 'Cooldown: Block');
             
             let oracle_dispatcher = IOracleDispatcher { contract_address: self.oracle.read() };
             let (current_price, price_timestamp) = oracle_dispatcher.get_price('FUSD/USD');
@@ -120,7 +129,15 @@ pub mod MonetaryPolicy {
             
             let target = self.target_price.read();
             let threshold = self.deviation_threshold.read();
+            let cb_threshold = self.circuit_breaker_threshold.read();
             
+            let diff = if current_price > target { current_price - target } else { target - current_price };
+            if diff > cb_threshold {
+                self.pausable.pause();
+                self.emit(CircuitBreakerTriggered { price: current_price, target });
+                return;
+            }
+
             let mut supply_delta: i128 = 0;
 
             if current_price > target + threshold {
@@ -134,6 +151,7 @@ pub mod MonetaryPolicy {
             }
 
             self.last_rebase_time.write(current_time);
+            self.last_rebase_block.write(current_block);
             self.emit(RebaseOperation {
                 epoch: current_time / self.epoch_duration.read(),
                 price: current_price,
@@ -144,36 +162,12 @@ pub mod MonetaryPolicy {
 
         fn set_paused(ref self: ContractState, paused: bool) {
             self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN); 
-            self._set_paused(paused);
+            if paused { self.pausable.pause(); } else { self.pausable.unpause(); }
         }
     }
 
-    #[abi(embed_v0)]
-    impl PausableImpl of IPausable<ContractState> {
-        fn pause(ref self: ContractState) {
-            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN); 
-            self._set_paused(true);
-        }
-        fn unpause(ref self: ContractState) {
-            self.access_control._assert_only_role(AccessControlComponent::Roles::ADMIN); 
-            self._set_paused(false);
-        }
-        fn is_paused(self: @ContractState) -> bool {
-            self.paused.read()
-        }
-    }
-    
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        fn _set_paused(ref self: ContractState, paused: bool) {
-            self.paused.write(paused);
-            if paused {
-                self.emit(Paused { account: starknet::get_caller_address() });
-            } else {
-                self.emit(Unpaused { account: starknet::get_caller_address() });
-            }
-        }
-
         fn _expand(ref self: ContractState, price: u256, target: u256) {
             let fusd = IFUSDDispatcher { contract_address: self.fusd_token.read() };
             let total_supply = fusd.total_supply();
@@ -187,7 +181,6 @@ pub mod MonetaryPolicy {
             let cap = total_supply / 50; 
             if mint_amount > cap { mint_amount = cap; }
             
-            // Further cap by maximum supply
             if total_supply + mint_amount > max_cap {
                 mint_amount = max_cap - total_supply;
             }
